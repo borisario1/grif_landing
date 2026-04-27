@@ -32,6 +32,9 @@ const buildDescriptionBlocks = (description: string) => {
     });
 };
 
+const formatRuAmount = (amount: number) =>
+  Intl.NumberFormat("ru-RU", { maximumFractionDigits: 0 }).format(amount);
+
 const buildDisplayName = (name: string, sku: string) => {
   const escapedSku = sku.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const trimmed = name.trim();
@@ -382,9 +385,24 @@ export function ProductModal({
               <article className="suggestion-card" key={item.sku}>
                 <img src={item.cardImages[0] ?? item.images[0] ?? product.cardImages[0] ?? product.images[0]} alt={item.name} loading="lazy" />
                 <strong>{buildDisplayName(item.name, item.sku)}</strong>
-                <p>
-                  {Intl.NumberFormat("ru-RU").format(item.newPrice.amount)} {item.newPrice.currency}
+                <p className="suggestion-card-sku">
+                  {productView.sku}: <span>{item.sku}</span>
                 </p>
+                <div className="suggestion-price-stack">
+                  <p className="suggestion-price-old">
+                    {formatRuAmount(item.oldPrice.amount)} {item.oldPrice.currency}
+                  </p>
+                  <p className="suggestion-price-new">
+                    {formatRuAmount(item.newPrice.amount)} {item.newPrice.currency}
+                  </p>
+                </div>
+                <div className="suggestion-discount-row">
+                  <span className="suggestion-saving-text">
+                    <span className="suggestion-saving-label">{catalogText.price.savingLabel}</span>
+                    <strong className="suggestion-saving-amount">{formatRuAmount(item.saving)} ₽</strong>
+                  </span>
+                  <span className="suggestion-discount-badge">-{item.discountPercent}%</span>
+                </div>
                 <button className="btn btn-primary suggestion-btn" type="button" onClick={() => onSelectProduct(item)}>
                   {productView.open}
                 </button>
