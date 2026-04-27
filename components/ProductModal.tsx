@@ -1,13 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { FileText, ShoppingCart } from "lucide-react";
+import { AlignLeft, ArrowUp, FileText, Ruler, ShoppingCart, X } from "lucide-react";
 import { landingContent } from "@/data/landing-content";
 import { catalogUiConfig, products } from "@/data/products";
 import { ProductItem } from "@/types/product";
 
+export type ProductModalInitialSection = "features" | "drawings" | "documents" | "description" | null;
+
 type ProductModalProps = {
   product: ProductItem | null;
+  initialSection?: ProductModalInitialSection;
+  /** Показывать поверх быстрого заказа (z-index выше quick-order-backdrop). */
+  elevateOverQuickOrder?: boolean;
   onClose: () => void;
   onSelectProduct: (product: ProductItem) => void;
+  onQuickOrder: (product: ProductItem, quantity: number) => void;
 };
 
 const buildDescriptionBlocks = (description: string) => {
@@ -26,34 +32,74 @@ const buildDescriptionBlocks = (description: string) => {
     });
 };
 
-export function ProductModal({ product, onClose, onSelectProduct }: ProductModalProps) {
+const buildDisplayName = (name: string, sku: string) => {
+  const escapedSku = sku.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const trimmed = name.trim();
+  const exactRemoved = trimmed.replace(new RegExp(`^\\s*${escapedSku}(?:\\s+|\\s*[-:|/]\\s*)?`, "i"), "").trim();
+  if (exactRemoved && exactRemoved !== trimmed) return exactRemoved;
+  const tokenMatch = trimmed.match(/^([A-Za-z0-9/-]{5,})\s+(.+)$/);
+  if (tokenMatch) {
+    const token = tokenMatch[1];
+    const rest = tokenMatch[2]?.trim();
+    if (rest && /\d/.test(token) && /[A-Za-z]/.test(token)) return rest;
+  }
+  return trimmed;
+};
+
+export function ProductModal({
+  product,
+  initialSection = null,
+  elevateOverQuickOrder = false,
+  onClose,
+  onSelectProduct,
+  onQuickOrder,
+}: ProductModalProps) {
   const common = landingContent.common;
   const productView = landingContent.productView;
   const catalogText = landingContent.catalog;
   const AUTO_SLIDE_DURATION_MS = catalogUiConfig.modalAutoplayIntervalMs;
   const AUTO_SLIDE_TICK_MS = 120;
   const [activeImage, setActiveImage] = useState(product?.mainImageIndex ?? 0);
-  const [renderedImage, setRenderedImage] = useState<string | null>(product?.images[product?.mainImageIndex ?? 0] ?? product?.images[0] ?? null);
+  const [renderedImage, setRenderedImage] = useState<string | null>(product?.cardImages[product?.mainImageIndex ?? 0] ?? product?.cardImages[0] ?? product?.images[product?.mainImageIndex ?? 0] ?? product?.images[0] ?? null);
   const [isImageSwitching, setImageSwitching] = useState(false);
   const [animateNextSwitch, setAnimateNextSwitch] = useState(false);
   const [slideProgress, setSlideProgress] = useState(0);
   const [isGalleryHovered, setGalleryHovered] = useState(false);
   const [showAllFeatures, setShowAllFeatures] = useState(false);
+  const [showFullDescription, setShowFullDescription] = useState(false);
   const [quantity, setQuantity] = useState(1);
   const [lightboxImage, setLightboxImage] = useState<string | null>(null);
+  const [isClosing, setIsClosing] = useState(false);
   const modalCardRef = useRef<HTMLDivElement | null>(null);
+  const purchaseRef = useRef<HTMLDivElement | null>(null);
+  const featuresRef = useRef<HTMLHeadingElement | null>(null);
+  const descriptionRef = useRef<HTMLElement | null>(null);
+  const drawingsRef = useRef<HTMLElement | null>(null);
+  const documentsRef = useRef<HTMLElement | null>(null);
+  const CLOSE_ANIMATION_MS = 180;
 
   useEffect(() => {
     setActiveImage(product?.mainImageIndex ?? 0);
-    setRenderedImage(product?.images[product?.mainImageIndex ?? 0] ?? product?.images[0] ?? null);
+    setRenderedImage(product?.cardImages[product?.mainImageIndex ?? 0] ?? product?.cardImages[0] ?? product?.images[product?.mainImageIndex ?? 0] ?? product?.images[0] ?? null);
     setImageSwitching(false);
     setAnimateNextSwitch(false);
     setSlideProgress(0);
     setGalleryHovered(false);
     setShowAllFeatures(false);
+    setShowFullDescription(false);
     setQuantity(1);
     setLightboxImage(null);
   }, [product?.mainImageIndex, product?.sku]);
+
+  useEffect(() => {
+    if (!product) return;
+    setIsClosing(false);
+  }, [product?.sku]);
+
+  const requestClose = () => {
+    setIsClosing(true);
+    window.setTimeout(() => onClose(), CLOSE_ANIMATION_MS);
+  };
 
   useEffect(() => {
     if (!product) return;
@@ -64,7 +110,8 @@ export function ProductModal({ product, onClose, onSelectProduct }: ProductModal
     if (catalogUiConfig.modalPauseOnHover && isGalleryHovered) {
       return;
     }
-    if (product.images.length <= 1) {
+    const galleryImages = product.cardImages.length ? product.cardImages : product.images;
+    if (galleryImages.length <= 1) {
       setSlideProgress(100);
       return;
     }
@@ -76,8 +123,8 @@ export function ProductModal({ product, onClose, onSelectProduct }: ProductModal
         if (next >= 100) {
           setAnimateNextSwitch(true);
           setActiveImage((current) => {
-            const normalizedCurrent = Math.max(0, Math.min(current, product.images.length - 1));
-            return (normalizedCurrent + 1) % product.images.length;
+            const normalizedCurrent = Math.max(0, Math.min(current, galleryImages.length - 1));
+            return (normalizedCurrent + 1) % galleryImages.length;
           });
           return 0;
         }
@@ -89,7 +136,8 @@ export function ProductModal({ product, onClose, onSelectProduct }: ProductModal
 
   useEffect(() => {
     if (!product) return;
-    const nextImage = product.images[activeImage] ?? product.images[0] ?? null;
+    const galleryImages = product.cardImages.length ? product.cardImages : product.images;
+    const nextImage = galleryImages[activeImage] ?? galleryImages[0] ?? null;
     if (!nextImage || nextImage === renderedImage) return;
     if (!animateNextSwitch) {
       setRenderedImage(nextImage);
@@ -121,15 +169,78 @@ export function ProductModal({ product, onClose, onSelectProduct }: ProductModal
     modalCardRef.current?.scrollTo({ top: 0, behavior: "smooth" });
   }, [product?.sku]);
 
+  useEffect(() => {
+    if (!product || !initialSection) return;
+    const timer = window.setTimeout(() => {
+      if (initialSection === "features") {
+        featuresRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+        return;
+      }
+      if (initialSection === "description") {
+        descriptionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+        return;
+      }
+      if (initialSection === "drawings") {
+        drawingsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+        return;
+      }
+      if (initialSection === "documents") {
+        documentsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    }, 60);
+    return () => window.clearTimeout(timer);
+  }, [initialSection, product]);
+
   if (!product) return null;
-  const safeMainImage = renderedImage ?? product.images[product.mainImageIndex] ?? product.images[0] ?? null;
+  const galleryImages = product.cardImages.length ? product.cardImages : product.images;
+  const thumbImages = product.thumbImages.length ? product.thumbImages : galleryImages;
+  const safeMainImage = renderedImage ?? galleryImages[product.mainImageIndex] ?? galleryImages[0] ?? product.images[0] ?? null;
+  const totalOldAmount = product.oldPrice.amount * quantity;
+  const totalNewAmount = product.newPrice.amount * quantity;
+  const totalSavingAmount = product.saving * quantity;
+  const hasLongDescription = descriptionBlocks.length > 3;
+  const visibleDescriptionBlocks = showFullDescription ? descriptionBlocks : descriptionBlocks.slice(0, 3);
+  const scrollToSection = (target: { current: HTMLElement | null }) => {
+    target.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
 
   return (
-    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label={product.name} onClick={onClose}>
-      <div className="modal-card editorial-modal" onClick={(event) => event.stopPropagation()} ref={modalCardRef}>
-        <button className="modal-close" onClick={onClose} aria-label={common.close}>
-          ×
+    <div
+      className={`modal-backdrop ${isClosing ? "is-closing" : ""} ${elevateOverQuickOrder ? "modal-backdrop--stack" : ""}`}
+      role="dialog"
+      aria-modal="true"
+      aria-label={product.name}
+      onClick={requestClose}
+    >
+      <div className="modal-floating-nav" aria-label="Навигация по разделам" onClick={(event) => event.stopPropagation()}>
+        <button type="button" className="modal-side-nav-btn" onClick={() => modalCardRef.current?.scrollTo({ top: 0, behavior: "smooth" })} aria-label="Вверх карточки товара">
+          <ArrowUp size={16} aria-hidden="true" />
         </button>
+        <button type="button" className="modal-side-nav-btn" onClick={() => scrollToSection(descriptionRef)} aria-label="К описанию">
+          <AlignLeft size={16} aria-hidden="true" />
+        </button>
+        <button type="button" className="modal-side-nav-btn" onClick={() => scrollToSection(drawingsRef)} aria-label="К схемам и чертежам">
+          <Ruler size={16} aria-hidden="true" />
+        </button>
+        <button type="button" className="modal-side-nav-btn" onClick={() => scrollToSection(documentsRef)} aria-label="К документам">
+          <FileText size={16} aria-hidden="true" />
+        </button>
+      </div>
+      <button
+        type="button"
+        className="modal-order-cta"
+        onClick={(event) => {
+          event.stopPropagation();
+          onQuickOrder(product, quantity);
+        }}
+      >
+        <ShoppingCart size={16} aria-hidden="true" />
+        Заказать
+      </button>
+      <button className="modal-close floating-close" onClick={requestClose} aria-label={common.close}>
+        <X size={18} aria-hidden="true" />
+      </button>
+      <div className="modal-card editorial-modal" onClick={(event) => event.stopPropagation()} ref={modalCardRef}>
         <div className="modal-top">
           <section
             className="gallery-column"
@@ -151,7 +262,7 @@ export function ProductModal({ product, onClose, onSelectProduct }: ProductModal
               </div>
             )}
             <div className="thumbnail-row">
-              {product.images.map((url, index) => (
+              {thumbImages.map((url, index) => (
                 <button
                   key={url}
                   className={`thumbnail-btn ${activeImage === index ? "active" : ""}`}
@@ -168,46 +279,61 @@ export function ProductModal({ product, onClose, onSelectProduct }: ProductModal
           </section>
           <section className="details-column">
             <div className="modal-head">
-              <h3>{product.name}</h3>
+              <h3>{buildDisplayName(product.name, product.sku)}</h3>
               <p className="product-sku">
                 {productView.sku}: <strong>{product.sku}</strong>
               </p>
+              <p className="year-price-pill">Итальянские смесители по цене 2021 года</p>
               <div className="price-stack modal-price">
-                <p className="product-price">
-                  {Intl.NumberFormat("ru-RU").format(product.newPrice.amount)} {product.newPrice.currency}
-                </p>
                 <p className="product-price-old">
-                  {Intl.NumberFormat("ru-RU").format(product.oldPrice.amount)} {product.oldPrice.currency}
+                  {Intl.NumberFormat("ru-RU").format(totalOldAmount)} {product.oldPrice.currency}
+                </p>
+                <p className="product-price">
+                  {Intl.NumberFormat("ru-RU").format(totalNewAmount)} {product.newPrice.currency}
                 </p>
               </div>
               <div className="discount-row">
                 <span className="discount-badge">-{product.discountPercent}%</span>
                 <span className="saving-text">
                   <span className="saving-label">{catalogText.price.savingLabel}</span>
-                  <strong className="saving-amount">{Intl.NumberFormat("ru-RU").format(product.saving)} ₽</strong>
+                  <strong className="saving-amount">{Intl.NumberFormat("ru-RU").format(totalSavingAmount)} ₽</strong>
                 </span>
               </div>
             </div>
-            <div className="purchase-panel">
+            <div className="purchase-panel" ref={purchaseRef}>
               <label className="qty-label" htmlFor="modal-qty">
                 {productView.quantity}
               </label>
               <div className="qty-row">
-                <input
-                  id="modal-qty"
-                  className="qty-input"
-                  type="number"
-                  min={1}
-                  value={quantity}
-                  onChange={(event) => setQuantity(Math.max(1, Number(event.target.value) || 1))}
-                />
-                <button className="btn btn-primary" type="button">
+                <div className="qty-stepper">
+                  <button type="button" className="qty-stepper-btn" aria-label="Уменьшить количество" onClick={() => setQuantity((prev) => Math.max(1, prev - 1))}>
+                    <span aria-hidden="true">−</span>
+                  </button>
+                  <input
+                    id="modal-qty"
+                    className="qty-input"
+                    type="number"
+                    min={1}
+                    value={quantity}
+                    onChange={(event) => setQuantity(Math.max(1, Number(event.target.value) || 1))}
+                  />
+                  <button type="button" className="qty-stepper-btn" aria-label="Увеличить количество" onClick={() => setQuantity((prev) => prev + 1)}>
+                    <span aria-hidden="true">+</span>
+                  </button>
+                </div>
+                <button
+                  className="btn btn-primary"
+                  type="button"
+                  onClick={() => {
+                    onQuickOrder(product, quantity);
+                  }}
+                >
                   <ShoppingCart size={16} aria-hidden="true" />
                   {common.buy}
                 </button>
               </div>
             </div>
-            <h4>{productView.keyFeatures}</h4>
+            <h4 ref={featuresRef}>{productView.keyFeatures}</h4>
             <div className="features-list">
               {product.keyFeatures.map((feature) => (
                 <div key={`${feature.name}-${feature.value}`} className="feature-row">
@@ -231,20 +357,43 @@ export function ProductModal({ product, onClose, onSelectProduct }: ProductModal
             )}
           </section>
         </div>
-        <section className="modal-section">
+        <section className="modal-section modal-anchor-section" ref={descriptionRef}>
           <div className="description-block full-width-description">
             <h4>{productView.description}</h4>
             <div className="modal-description">
-              {descriptionBlocks.map((block, index) => (
+              {visibleDescriptionBlocks.map((block, index) => (
                 <p key={`${product.sku}-desc-${index}`} className={block.isHeading ? "modal-description-heading" : undefined}>
                   {block.text}
                 </p>
               ))}
             </div>
+            {hasLongDescription && (
+              <button className="btn btn-secondary modal-toggle" onClick={() => setShowFullDescription((prev) => !prev)}>
+                {showFullDescription ? "Свернуть" : "Читать полное описание..."}
+              </button>
+            )}
           </div>
         </section>
 
         <section className="modal-section">
+          <h4>{productView.alsoChoose}</h4>
+          <div className="suggestions-grid">
+            {recommendedProducts.map((item) => (
+              <article className="suggestion-card" key={item.sku}>
+                <img src={item.cardImages[0] ?? item.images[0] ?? product.cardImages[0] ?? product.images[0]} alt={item.name} loading="lazy" />
+                <strong>{buildDisplayName(item.name, item.sku)}</strong>
+                <p>
+                  {Intl.NumberFormat("ru-RU").format(item.newPrice.amount)} {item.newPrice.currency}
+                </p>
+                <button className="btn btn-primary suggestion-btn" type="button" onClick={() => onSelectProduct(item)}>
+                  {productView.open}
+                </button>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        <section className="modal-section modal-anchor-section" ref={drawingsRef}>
           <h4>{productView.drawings}</h4>
           <div className="modal-gallery drawings-unified">
             {product.drawings.flatMap((drawing) =>
@@ -262,7 +411,7 @@ export function ProductModal({ product, onClose, onSelectProduct }: ProductModal
             )}
           </div>
         </section>
-        <section className="modal-section">
+        <section className="modal-section modal-anchor-section" ref={documentsRef}>
           <h4>{productView.documents}</h4>
           <div className="document-cards">
             {product.documents.map((doc) => (
@@ -271,23 +420,6 @@ export function ProductModal({ product, onClose, onSelectProduct }: ProductModal
                 <strong>{doc.title}</strong>
                 <span>{productView.openDocument}</span>
               </a>
-            ))}
-          </div>
-        </section>
-        <section className="modal-section">
-          <h4>{productView.alsoChoose}</h4>
-          <div className="suggestions-grid">
-            {recommendedProducts.map((item) => (
-              <article className="suggestion-card" key={item.sku}>
-                <img src={item.images[0] ?? product.images[0]} alt={item.name} loading="lazy" />
-                <strong>{item.name}</strong>
-                <p>
-                  {Intl.NumberFormat("ru-RU").format(item.newPrice.amount)} {item.newPrice.currency}
-                </p>
-                <button className="btn btn-primary suggestion-btn" type="button" onClick={() => onSelectProduct(item)}>
-                  {productView.open}
-                </button>
-              </article>
             ))}
           </div>
         </section>

@@ -33,6 +33,8 @@ export type ProductItem = {
   description: string;
   normalizedDescription: string;
   images: string[];
+  cardImages: string[];
+  thumbImages: string[];
   drawings: ProductDrawing[];
   documents: ProductDocument[];
   features: ProductFeature[];

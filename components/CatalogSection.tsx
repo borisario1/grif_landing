@@ -1,48 +1,54 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { FormEvent } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { landingContent } from "@/data/landing-content";
-import { catalogMeta, catalogUiConfig, getProductBySku, products } from "@/data/products";
-import quickOrderBg from "@/images/professional-interior_2850587875.jpeg";
+import { catalogUiConfig, getProductBySku, getProductPagePath, getProductQuickOrderPath, products } from "@/data/products";
 import { ProductItem } from "@/types/product";
 import { CatalogFilters } from "@/components/CatalogFilters";
 import { ProductCard } from "@/components/ProductCard";
 import { ProductModal } from "@/components/ProductModal";
+import { QuickOrderModal } from "@/components/QuickOrderModal";
 
 const ALL = "all";
 
 export function CatalogSection() {
   const c = landingContent.catalog;
-  const common = landingContent.common;
-  const heroQuickOrder = landingContent.hero.quickOrderModal;
   const router = useRouter();
-  const pathname = usePathname();
   const searchParams = useSearchParams();
   const [selectedCategory, setSelectedCategory] = useState(ALL);
   const [selectedUsageType, setSelectedUsageType] = useState(ALL);
   const [selectedColor, setSelectedColor] = useState(ALL);
   const [displayMode, setDisplayMode] = useState(catalogUiConfig.defaultDisplayMode);
   const [openedProduct, setOpenedProduct] = useState<ProductItem | null>(null);
+  const [openedSection, setOpenedSection] = useState<"features" | "drawings" | "documents" | "description" | null>(null);
+  const [isProductLayerAboveQuickOrder, setProductLayerAboveQuickOrder] = useState(false);
   const [quickOrderProduct, setQuickOrderProduct] = useState<ProductItem | null>(null);
-  const [name, setName] = useState("");
-  const [phone, setPhone] = useState("");
-  const [isSubmitted, setSubmitted] = useState(false);
+  const [quickOrderQuantity, setQuickOrderQuantity] = useState(1);
+
+  const applyProductUrl = (product: ProductItem) => {
+    if (typeof window === "undefined") return;
+    window.history.replaceState(window.history.state, "", getProductPagePath(product.sku));
+  };
+
+  const restoreCatalogUrl = () => {
+    if (typeof window === "undefined") return;
+    window.history.replaceState(window.history.state, "", "/#catalog");
+  };
 
   useEffect(() => {
-    const productSku = searchParams.get("product");
-    if (!productSku) {
-      if (openedProduct !== null) {
-        setOpenedProduct(null);
-      }
+    const legacySku = searchParams.get("product");
+    if (!legacySku) return;
+    const matched = getProductBySku(legacySku);
+    if (matched) {
+      router.replace(getProductPagePath(matched.sku));
       return;
     }
-    const matched = getProductBySku(productSku);
-    if (matched && matched.sku !== openedProduct?.sku) {
-      setOpenedProduct(matched);
-    }
-  }, [openedProduct, searchParams]);
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete("product");
+    const query = params.toString();
+    router.replace(query ? `/?${query}` : "/");
+  }, [router, searchParams]);
 
   const filteredProducts = useMemo(() => {
     return products.filter((item) => {
@@ -53,6 +59,51 @@ export function CatalogSection() {
     });
   }, [selectedCategory, selectedUsageType, selectedColor]);
 
+  const availableCategories = useMemo(() => {
+    const list = products.filter((item) => {
+      const usageTypeMatch = selectedUsageType === ALL || item.usageType === selectedUsageType;
+      const colorMatch = selectedColor === ALL || item.color === selectedColor;
+      return usageTypeMatch && colorMatch;
+    });
+    return Array.from(new Set(list.map((item) => item.category)));
+  }, [selectedColor, selectedUsageType]);
+
+  const availableUsageTypes = useMemo(() => {
+    const list = products.filter((item) => {
+      const categoryMatch = selectedCategory === ALL || item.category === selectedCategory;
+      const colorMatch = selectedColor === ALL || item.color === selectedColor;
+      return categoryMatch && colorMatch;
+    });
+    return Array.from(new Set(list.map((item) => item.usageType)));
+  }, [selectedCategory, selectedColor]);
+
+  const availableColors = useMemo(() => {
+    const list = products.filter((item) => {
+      const categoryMatch = selectedCategory === ALL || item.category === selectedCategory;
+      const usageTypeMatch = selectedUsageType === ALL || item.usageType === selectedUsageType;
+      return categoryMatch && usageTypeMatch;
+    });
+    return Array.from(new Set(list.map((item) => item.color)));
+  }, [selectedCategory, selectedUsageType]);
+
+  useEffect(() => {
+    if (selectedCategory !== ALL && !availableCategories.includes(selectedCategory)) {
+      setSelectedCategory(ALL);
+    }
+  }, [availableCategories, selectedCategory]);
+
+  useEffect(() => {
+    if (selectedUsageType !== ALL && !availableUsageTypes.includes(selectedUsageType)) {
+      setSelectedUsageType(ALL);
+    }
+  }, [availableUsageTypes, selectedUsageType]);
+
+  useEffect(() => {
+    if (selectedColor !== ALL && !availableColors.includes(selectedColor)) {
+      setSelectedColor(ALL);
+    }
+  }, [availableColors, selectedColor]);
+
   const colorHexMap = useMemo(
     () =>
       products.reduce<Record<string, string>>((acc, item) => {
@@ -62,118 +113,110 @@ export function CatalogSection() {
     [],
   );
 
-  const openProductWithUrl = (product: ProductItem) => {
-    const params = new URLSearchParams(searchParams.toString());
-    params.set("product", product.sku);
-    router.replace(`${pathname}?${params.toString()}#catalog`, { scroll: false });
+  const openProductQuickView = (product: ProductItem, section?: "features" | "drawings" | "documents" | "description") => {
+    setOpenedProduct(product);
+    setOpenedSection(section ?? null);
+    setProductLayerAboveQuickOrder(false);
+    applyProductUrl(product);
+  };
+
+  const openProductDocsFromQuickOrder = (section: "documents" | "drawings" | "description") => {
+    const target = quickOrderProduct;
+    if (!target) return;
+    setOpenedProduct(target);
+    setOpenedSection(section);
+    setProductLayerAboveQuickOrder(true);
+    applyProductUrl(target);
+  };
+
+  const openQuickOrder = (product: ProductItem, quantity = 1) => {
+    if (typeof window === "undefined") return;
+    const qty = Math.max(1, quantity || 1);
+    setQuickOrderProduct(product);
+    setQuickOrderQuantity(qty);
+    setProductLayerAboveQuickOrder(false);
+    const base = getProductQuickOrderPath(product.sku);
+    const url = qty > 1 ? `${base}&qty=${qty}` : base;
+    window.history.replaceState(window.history.state, "", url);
   };
 
   const closeProductModal = () => {
-    const params = new URLSearchParams(searchParams.toString());
-    params.delete("product");
-    const queryString = params.toString();
-    router.replace(queryString ? `${pathname}?${queryString}#catalog` : `${pathname}#catalog`, { scroll: false });
+    setOpenedProduct(null);
+    setOpenedSection(null);
+    setProductLayerAboveQuickOrder(false);
+    restoreCatalogUrl();
   };
 
-  const openQuickOrder = (product: ProductItem) => {
-    setQuickOrderProduct(product);
-    setSubmitted(false);
-    setName("");
-    setPhone("");
-  };
-
-  const submitQuickOrder = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setSubmitted(true);
+  const closeQuickOrderModal = () => {
+    setQuickOrderProduct(null);
+    if (typeof window === "undefined") return;
+    if (openedProduct) {
+      window.history.replaceState(window.history.state, "", getProductPagePath(openedProduct.sku));
+    } else {
+      restoreCatalogUrl();
+    }
   };
 
   return (
     <section className="section" id="catalog">
       <div className="container">
-        <h2>{c.title}</h2>
-        <p className="section-lead">{c.lead}</p>
-
-        <CatalogFilters
-          categories={catalogMeta.categories}
-          usageTypes={catalogMeta.usageTypes}
-          colors={catalogMeta.colors}
-          colorHexMap={colorHexMap}
-          selectedCategory={selectedCategory}
-          selectedUsageType={selectedUsageType}
-          selectedColor={selectedColor}
-          displayMode={displayMode}
-          showDisplayModeToggle={catalogUiConfig.manualMainImageEnabled && catalogUiConfig.showDisplayModeToggleWhenManual}
-          onCategoryChange={setSelectedCategory}
-          onUsageTypeChange={setSelectedUsageType}
-          onColorChange={setSelectedColor}
-          onDisplayModeChange={setDisplayMode}
-        />
+        <div className="catalog-header-row">
+          <div className="catalog-header-copy">
+            <h2>{c.title}</h2>
+            <p className="section-lead">{c.lead}</p>
+          </div>
+          <CatalogFilters
+            categories={availableCategories}
+            usageTypes={availableUsageTypes}
+            colors={availableColors}
+            colorHexMap={colorHexMap}
+            selectedCategory={selectedCategory}
+            selectedUsageType={selectedUsageType}
+            selectedColor={selectedColor}
+            onReset={() => {
+              setSelectedCategory(ALL);
+              setSelectedUsageType(ALL);
+              setSelectedColor(ALL);
+            }}
+            onCategoryChange={setSelectedCategory}
+            onUsageTypeChange={setSelectedUsageType}
+            onColorChange={setSelectedColor}
+          />
+        </div>
 
         <div className="catalog-summary">
           {c.found} <strong>{filteredProducts.length}</strong> {c.outOf} {products.length}
         </div>
 
         <div className="catalog-grid">
-          {filteredProducts.map((product) => (
+          {filteredProducts.map((product, index) => (
             <ProductCard
               key={product.sku}
               product={product}
-              onOpen={openProductWithUrl}
+              onOpen={openProductQuickView}
               onQuickOrder={openQuickOrder}
               displayMode={displayMode}
+              prioritizeMainImage={index < 4}
             />
           ))}
         </div>
       </div>
-
-      <ProductModal product={openedProduct} onClose={closeProductModal} onSelectProduct={openProductWithUrl} />
-      {quickOrderProduct && (
-        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label={common.quickOrder} onClick={() => setQuickOrderProduct(null)}>
-          <div
-            className="modal-card quick-order-modal quick-order-modal-with-bg"
-            onClick={(event) => event.stopPropagation()}
-            style={{
-              backgroundImage: `linear-gradient(180deg, rgba(255, 255, 255, 0.62) 0%, rgba(255, 255, 255, 0.74) 100%), url(${quickOrderBg.src})`,
-            }}
-          >
-            <button className="modal-close" onClick={() => setQuickOrderProduct(null)} aria-label={common.close}>
-              ×
-            </button>
-            {!isSubmitted ? (
-              <>
-                <h3>{heroQuickOrder.title}</h3>
-                <p className="quick-order-subtitle">
-                  {quickOrderProduct.name}. {heroQuickOrder.subtitle}
-                </p>
-                <a className="quick-order-phone" href={heroQuickOrder.phoneHref}>
-                  {heroQuickOrder.phoneHint}
-                </a>
-                <form className="quick-order-form" onSubmit={submitQuickOrder}>
-                  <label>
-                    {heroQuickOrder.nameLabel}
-                    <input value={name} onChange={(event) => setName(event.target.value)} required placeholder={heroQuickOrder.namePlaceholder} />
-                  </label>
-                  <label>
-                    {heroQuickOrder.phoneLabel}
-                    <input value={phone} onChange={(event) => setPhone(event.target.value)} required placeholder={heroQuickOrder.phonePlaceholder} />
-                  </label>
-                  <button className="btn btn-primary" type="submit">
-                    {heroQuickOrder.submit}
-                  </button>
-                </form>
-              </>
-            ) : (
-              <div className="quick-order-success">
-                <h3>{heroQuickOrder.successTitle}</h3>
-                <p>{heroQuickOrder.successText}</p>
-                <button className="btn btn-primary" onClick={() => setQuickOrderProduct(null)}>
-                  {heroQuickOrder.successClose}
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
+      <ProductModal
+        product={openedProduct}
+        initialSection={openedSection}
+        elevateOverQuickOrder={Boolean(quickOrderProduct && openedProduct && isProductLayerAboveQuickOrder)}
+        onClose={closeProductModal}
+        onSelectProduct={openProductQuickView}
+        onQuickOrder={openQuickOrder}
+      />
+      {quickOrderProduct ? (
+        <QuickOrderModal
+          product={quickOrderProduct}
+          initialQuantity={quickOrderQuantity}
+          onClosed={closeQuickOrderModal}
+          onOpenProductDocs={openProductDocsFromQuickOrder}
+        />
+      ) : null}
     </section>
   );
 }

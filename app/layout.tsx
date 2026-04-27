@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Manrope } from "next/font/google";
+import { landingContent } from "@/data/landing-content";
 import "./globals.css";
 
 const manrope = Manrope({
@@ -9,8 +10,15 @@ const manrope = Manrope({
 });
 
 export const metadata: Metadata = {
-  title: "Paini Promo - Grifmaster",
-  description: "Акционный лендинг бренда Paini от компании Грифмастер.",
+  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? "https://paini.grifmaster.ru"),
+  title: landingContent.meta.title,
+  description: landingContent.meta.description,
+  openGraph: {
+    title: landingContent.meta.openGraph.title,
+    description: landingContent.meta.openGraph.description,
+    type: landingContent.meta.openGraph.type as "website",
+    locale: landingContent.meta.openGraph.locale,
+  },
 };
 
 export default function RootLayout({
@@ -19,7 +27,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="ru">
+    <html lang="ru" data-scroll-behavior="smooth">
       <body className={manrope.variable}>{children}</body>
     </html>
   );

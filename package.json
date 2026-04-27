@@ -3,8 +3,13 @@
   "version": "1.0.0",
   "description": "Promo landing for Paini campaign",
   "scripts": {
+    "predev": "npm run seo:generate",
     "dev": "next dev",
+    "media:cache": "node ./scripts/generate-media-cache.mjs",
+    "seo:generate": "node ./scripts/generate-seo-files.mjs",
+    "prebuild": "npm run media:cache && npm run seo:generate",
     "build": "next build",
+    "build:regru": "bash ./scripts/build-regru.sh",
     "start": "next start",
     "lint": "eslint ."
   },
@@ -23,6 +28,7 @@
     "@types/react-dom": "^19.2.3",
     "eslint": "^9.39.4",
     "eslint-config-next": "^16.2.4",
+    "sharp": "^0.34.5",
     "typescript": "^6.0.3"
   }
 }

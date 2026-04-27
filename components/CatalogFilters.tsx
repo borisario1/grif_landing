@@ -1,4 +1,3 @@
-import { CatalogDisplayMode } from "@/data/products";
 import { landingContent } from "@/data/landing-content";
 
 type CatalogFiltersProps = {
@@ -9,12 +8,10 @@ type CatalogFiltersProps = {
   selectedCategory: string;
   selectedUsageType: string;
   selectedColor: string;
-  displayMode: CatalogDisplayMode;
-  showDisplayModeToggle: boolean;
+  onReset: () => void;
   onCategoryChange: (value: string) => void;
   onUsageTypeChange: (value: string) => void;
   onColorChange: (value: string) => void;
-  onDisplayModeChange: (value: CatalogDisplayMode) => void;
 };
 
 const ALL = "all";
@@ -27,17 +24,21 @@ export function CatalogFilters({
   selectedCategory,
   selectedUsageType,
   selectedColor,
-  displayMode,
-  showDisplayModeToggle,
+  onReset,
   onCategoryChange,
   onUsageTypeChange,
   onColorChange,
-  onDisplayModeChange,
 }: CatalogFiltersProps) {
   const c = landingContent.catalog.filters;
   const common = landingContent.common;
+  const hasActiveFilters = selectedCategory !== ALL || selectedUsageType !== ALL || selectedColor !== ALL;
   return (
     <div className="filters-panel">
+      <div className="filters-head">
+        <button className="filter-reset-btn" onClick={onReset} disabled={!hasActiveFilters}>
+          Сбросить фильтры
+        </button>
+      </div>
       <div className="filter-group">
         <p className="filter-title">{c.category}</p>
         <div className="filter-buttons">
@@ -92,19 +93,6 @@ export function CatalogFilters({
           ))}
         </div>
       </div>
-      {showDisplayModeToggle && (
-        <div className="filter-group">
-          <p className="filter-title">{c.displayMode}</p>
-          <div className="filter-buttons">
-            <button className={`filter-btn ${displayMode === "more_info" ? "active" : ""}`} onClick={() => onDisplayModeChange("more_info")}>
-              {c.moreInfo}
-            </button>
-            <button className={`filter-btn ${displayMode === "more_goods" ? "active" : ""}`} onClick={() => onDisplayModeChange("more_goods")}>
-              {c.moreProduct}
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

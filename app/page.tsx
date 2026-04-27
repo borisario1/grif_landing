@@ -1,5 +1,6 @@
 import { Suspense } from "react";
 import { CatalogSection } from "@/components/CatalogSection";
+import { DeliverySection } from "@/components/DeliverySection";
 import { FAQSection } from "@/components/FAQSection";
 import { Footer } from "@/components/Footer";
 import { HeroSection } from "@/components/HeroSection";
@@ -17,13 +18,14 @@ export default function HomePage() {
     <main>
       <SiteHeader />
       <HeroSection />
-      <ValuePropositionSection />
       <SocialProofSection maxSaving={maxSaving} />
       <Suspense fallback={null}>
         <CatalogSection />
       </Suspense>
       <TrustSection />
+      <DeliverySection />
       <Stage2HooksSection />
+      <ValuePropositionSection />
       <FAQSection />
       <Footer />
     </main>

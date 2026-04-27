@@ -1,4 +1,5 @@
 import source from "@/docs/14_sku_action.json";
+import mediaCacheMap from "@/data/media-cache-map.json";
 import { ProductItem } from "@/types/product";
 
 export type CatalogDisplayMode = "more_goods" | "more_info";
@@ -150,6 +151,45 @@ const normalizeDescription = (description: string) => {
   return uniqueParagraphs.join("\n\n");
 };
 
+const buildDisplayName = (name: string, sku: string) => {
+  const escapedSku = sku.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const trimmed = name.trim();
+  const exactRemoved = trimmed.replace(new RegExp(`^\\s*${escapedSku}(?:\\s+|\\s*[-:|/]\\s*)?`, "i"), "").trim();
+  if (exactRemoved && exactRemoved !== trimmed) return exactRemoved;
+  const tokenMatch = trimmed.match(/^([A-Za-z0-9/-]{5,})\s+(.+)$/);
+  if (tokenMatch) {
+    const token = tokenMatch[1];
+    const rest = tokenMatch[2]?.trim();
+    if (rest && /\d/.test(token) && /[A-Za-z]/.test(token)) return rest;
+  }
+  return trimmed;
+};
+
+const slugify = (value: string) =>
+  value
+    .toLowerCase()
+    .replace(/['"`]+/g, "")
+    .replace(/[^a-z0-9]+/gi, "-")
+    .replace(/^-+|-+$/g, "")
+    .replace(/-{2,}/g, "-");
+
+const buildSkuToken = (sku: string) =>
+  sku
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/gi, "-")
+    .replace(/^-+|-+$/g, "")
+    .replace(/-{2,}/g, "-");
+
+const buildSlugFromLink = (link: string) => {
+  try {
+    const pathname = new URL(link).pathname;
+    const lastSegment = pathname.split("/").filter(Boolean).pop() ?? "";
+    return slugify(lastSegment);
+  } catch {
+    return "";
+  }
+};
+
 const buildKeyFeatures = (
   features: Array<{
     name: string;
@@ -172,6 +212,9 @@ const resolveMainImageIndex = (product: RawProduct, imageCount: number) => {
   return Math.min(normalizedIndex, imageCount - 1);
 };
 
+const getCachedCardImage = (url: string) => mediaCacheMap[url as keyof typeof mediaCacheMap]?.card ?? url;
+const getCachedThumbImage = (url: string) => mediaCacheMap[url as keyof typeof mediaCacheMap]?.thumb ?? url;
+
 export const products: ProductItem[] = raw.products.map((item) => {
   const basePrice = extractPrice(item);
   const normalizedFeatures = Object.values(item.features ?? {})
@@ -180,6 +223,8 @@ export const products: ProductItem[] = raw.products.map((item) => {
   const discountModel = calculateDiscountModel(basePrice);
 
   const images = item.images ?? [];
+  const cardImages = images.map(getCachedCardImage);
+  const thumbImages = images.map(getCachedThumbImage);
   return {
     sku: item.sku,
     name: item.name,
@@ -195,6 +240,8 @@ export const products: ProductItem[] = raw.products.map((item) => {
     description: item.description,
     normalizedDescription: normalizeDescription(item.description),
     images,
+    cardImages,
+    thumbImages,
     drawings: item.drawings ?? [],
     documents: (item.documents ?? []).map((doc) => ({ title: doc.title, url: doc.url })),
     features: normalizedFeatures,
@@ -208,6 +255,16 @@ export const products: ProductItem[] = raw.products.map((item) => {
   };
 });
 
+const productSlugMap = new Map(
+  raw.products.map((item) => {
+    const skuToken = buildSkuToken(item.sku);
+    const linkSlug = buildSlugFromLink(item.link);
+    const fallbackNameSlug = slugify(buildDisplayName(item.name, item.sku));
+    const composed = linkSlug || (fallbackNameSlug ? `${skuToken}-${fallbackNameSlug}` : skuToken);
+    return [item.sku, composed];
+  }),
+);
+
 export const catalogMeta = {
   total: products.length,
   categories: Array.from(new Set(products.map((item) => item.category))),
@@ -217,4 +274,36 @@ export const catalogMeta = {
 
 export const getProductBySku = (sku: string) => products.find((item) => item.sku === sku);
 
-export const getProductPagePath = (sku: string) => `/products/${encodeURIComponent(sku)}`;
+export const getProductByIdentifier = (identifier: string) => {
+  const decoded = decodeURIComponent(identifier).trim();
+  if (!decoded) return undefined;
+  const direct = getProductBySku(decoded);
+  if (direct) return direct;
+  const normalized = decoded.toLowerCase().replace(/^-+|-+$/g, "");
+  const bySlug = products.find((item) => productSlugMap.get(item.sku) === normalized);
+  if (bySlug) return bySlug;
+  const bySkuToken = products.find((item) => buildSkuToken(item.sku) === normalized || normalized.startsWith(`${buildSkuToken(item.sku)}-`));
+  if (bySkuToken) return bySkuToken;
+  return undefined;
+};
+
+export const getProductPagePath = (sku: string) => {
+  const slug = productSlugMap.get(sku);
+  return `/products/${encodeURIComponent(slug ?? sku)}`;
+};
+
+/** Query flag on `/products/.../` — same HTML/meta as full card; reopen via shared link (static export–friendly). */
+export const productQuickViewQuery = { key: "modal", value: "1" } as const;
+
+export const getProductQuickViewPath = (sku: string) => {
+  const base = getProductPagePath(sku).replace(/\/+$/, "");
+  return `${base}/?${productQuickViewQuery.key}=${productQuickViewQuery.value}`;
+};
+
+/** Быстрый заказ по товару: тот же путь и мета, что у карточки; повторное открытие по ссылке. */
+export const productQuickOrderQuery = { key: "quickOrder", value: "1" } as const;
+
+export const getProductQuickOrderPath = (sku: string) => {
+  const base = getProductPagePath(sku).replace(/\/+$/, "");
+  return `${base}/?${productQuickOrderQuery.key}=${productQuickOrderQuery.value}`;
+};
