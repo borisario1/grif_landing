@@ -1,13 +1,13 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { BookOpen, FileText, PackageCheck, Ruler, Store, Truck } from "lucide-react";
 import { landingContent } from "@/data/landing-content";
 import quickOrderBg from "@/images/professional-interior_2850587875.jpeg";
 import cdek from "@/images/cdek.jpg";
 import { ProductItem } from "@/types/product";
 
-const QUICK_ORDER_PHRASES = [
+const generalPhrases = [
   "Сделано в Италии",
   "Корпус из цельной латуни",
   "Поставщик с 2008 года",
@@ -32,53 +32,9 @@ const QUICK_ORDER_PHRASES = [
   "Гибкая подводка в комплекте",
 ];
 
-type FloatingPhrase = {
-  id: number;
-  slot: number;
-  text: string;
-  kind: "country" | "regular";
-  tone: "deep" | "blue" | "sky" | "amber";
-  fontSizeRem: number;
-  entering: boolean;
-  softFading: boolean;
-  x: number;
-  y: number;
-  vx: number;
-  vy: number;
-  lifeMs: number;
-  enterMs: number;
-  exitMs: number;
-  exiting: boolean;
-};
+const DRIFT_COLORS = ["#1B4F8A", "#C47B2B", "#5BB3E8", "#0F4C81", "#4A4A8A"] as const;
 
-type PhraseOption = {
-  text: string;
-  kind: "country" | "regular";
-};
-
-const CLOUD_SLOTS = [
-  { x: 2, y: 4 },
-  { x: 58, y: 4 },
-  { x: 30, y: 36 },
-  { x: 2, y: 68 },
-  { x: 58, y: 68 },
-];
-
-const CLOUD_SLOT_DRIFT = [
-  { x: -10, y: -6 },
-  { x: 10, y: -6 },
-  { x: 0, y: 10 },
-  { x: -10, y: 6 },
-  { x: 10, y: 6 },
-];
-
-const resolvePhraseFontSize = (text: string) => {
-  const len = text.trim().length;
-  if (len <= 26) return 0.98;
-  if (len <= 44) return 0.93;
-  if (len <= 62) return 0.88;
-  return 0.83;
-};
+const MAX_PRODUCT_PHRASE_LEN = 72;
 
 const formatAmount = (amount: number) => Intl.NumberFormat("ru-RU", { maximumFractionDigits: 0 }).format(amount);
 const formatWeight = (weightKg: number) => Intl.NumberFormat("ru-RU", { minimumFractionDigits: weightKg < 10 ? 2 : 1, maximumFractionDigits: 2 }).format(weightKg);
@@ -132,6 +88,147 @@ const parseWeightKg = (product: ProductItem) => {
   return numeric;
 };
 
+function hashString(s: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h = Math.imul(h ^ s.charCodeAt(i), 16777619);
+  }
+  return h >>> 0;
+}
+
+function seededUnit(seed: number, salt: number): number {
+  const x = Math.sin(seed * 0.0001 + salt * 12.9898) * 43758.5453;
+  return x - Math.floor(x);
+}
+
+function shuffleStrings(arr: string[], seed: number): string[] {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(seededUnit(seed, i * 7919) * (i + 1));
+    const t = a[i];
+    a[i] = a[j]!;
+    a[j] = t!;
+  }
+  return a;
+}
+
+function clampPhraseLen(line: string): string {
+  const t = line.trim();
+  if (t.length <= MAX_PRODUCT_PHRASE_LEN) return t;
+  return `${t.slice(0, MAX_PRODUCT_PHRASE_LEN - 1)}…`;
+}
+
+function buildProductPhrases(product: ProductItem): string[] {
+  const raw: string[] = [];
+  if (product.brand?.trim()) raw.push(product.brand.trim());
+  if (product.category?.trim()) raw.push(product.category.trim());
+  if (product.usageType?.trim()) raw.push(product.usageType.trim());
+  if (product.color?.trim()) raw.push(`Оттенок: ${product.color.trim()}`);
+  product.keyFeatures.slice(0, 8).forEach((f) => {
+    const line = `${f.name}: ${f.value}`.trim();
+    if (line) raw.push(line);
+  });
+  product.features.slice(0, 12).forEach((f) => {
+    const line = `${f.name}: ${f.value}`.trim();
+    if (line) raw.push(line);
+  });
+  product.topBenefits?.forEach((b) => {
+    if (b?.trim()) raw.push(b.trim());
+  });
+  if (product.discountPercent > 0) {
+    raw.push(`Выгода ${product.discountPercent}%`);
+  }
+  raw.push(`От ${formatAmount(product.newPrice.amount)} ${product.newPrice.currency}`);
+  if (product.saving > 0) {
+    raw.push(`Экономия ${formatAmount(product.saving)} ₽`);
+  }
+
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const line of raw) {
+    const c = clampPhraseLen(line);
+    if (!c) continue;
+    const k = c.toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(c);
+  }
+  return out;
+}
+
+type QuickOrderTypographicDriftProps = {
+  phrases: string[];
+  seed: number;
+  isPaused: boolean;
+};
+
+type DriftRowConfig = {
+  id: string;
+  dir: "left" | "right";
+  sizeMin: number;
+  sizeMax: number;
+  oMin: number;
+  oMax: number;
+  duration: number;
+  delay: number;
+  z: number;
+};
+
+/** Порядок: левый мелкий → правый крупный призрак → левый средний → правый ещё крупнее и медленнее → левый задний. */
+const DRIFT_ROWS: DriftRowConfig[] = [
+  { id: "l1", dir: "left", sizeMin: 13, sizeMax: 15, oMin: 0.75, oMax: 1.0, duration: 250, delay: -30, z: 5 },
+  { id: "r1", dir: "right", sizeMin: 24, sizeMax: 32, oMin: 0.03, oMax: 0.09, duration: 520, delay: -48, z: 4 },
+  { id: "l2", dir: "left", sizeMin: 18, sizeMax: 22, oMin: 0.2, oMax: 0.35, duration: 620, delay: -140, z: 3 },
+  { id: "r2", dir: "right", sizeMin: 32, sizeMax: 44, oMin: 0.015, oMax: 0.055, duration: 1100, delay: -210, z: 2 },
+  { id: "l3", dir: "left", sizeMin: 28, sizeMax: 36, oMin: 0.05, oMax: 0.1, duration: 600, delay: -170, z: 1 },
+];
+
+function driftRowSalt(id: string): number {
+  let s = 0;
+  for (let i = 0; i < id.length; i++) {
+    s += id.charCodeAt(i) * (i + 1);
+  }
+  return s;
+}
+
+function QuickOrderTypographicDrift({ phrases, seed, isPaused }: QuickOrderTypographicDriftProps) {
+  const cycle = phrases.length ? phrases : generalPhrases;
+  const rows = useMemo(() => {
+    return DRIFT_ROWS.map((row) => {
+      const rs = driftRowSalt(row.id);
+      const opacity = row.oMin + seededUnit(seed, rs * 997) * (row.oMax - row.oMin);
+      const items = cycle.map((text, i) => ({
+        text,
+        color: DRIFT_COLORS[Math.min(DRIFT_COLORS.length - 1, Math.floor(seededUnit(seed, i * 31 + rs * 127) * DRIFT_COLORS.length))],
+        fontSizePx: row.sizeMin + Math.floor(seededUnit(seed, i * 53 + rs * 211) * (row.sizeMax - row.sizeMin + 1)),
+      }));
+      return { ...row, opacity, items };
+    });
+  }, [cycle, seed]);
+
+  return (
+    <div className="quick-order-typographic-drift" aria-hidden="true">
+      {rows.map((row) => (
+        <div key={row.id} className="quick-order-marquee-layer" style={{ opacity: row.opacity, zIndex: row.z }}>
+          <div
+            className={`quick-order-marquee-track quick-order-marquee-track--${row.dir}${isPaused ? " is-paused" : ""}`}
+            style={{ animationDuration: `${row.duration}s`, animationDelay: `${row.delay}s` }}
+          >
+            {[...row.items, ...row.items].map((item, i) => (
+              <span key={i} className="quick-order-marquee-chip" style={{ color: item.color, fontSize: `${item.fontSizePx}px` }}>
+                {item.text}
+                <span className="quick-order-marquee-sep" aria-hidden="true">
+                  ·
+                </span>
+              </span>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export type QuickOrderProductDocSection = "documents" | "drawings" | "description";
 
 type QuickOrderModalProps = {
@@ -159,14 +256,9 @@ export function QuickOrderModal({ product, initialQuantity = 1, onClosed, onOpen
   const [isQuickOrderClosing, setQuickOrderClosing] = useState(false);
   const [quickImageIndex, setQuickImageIndex] = useState(0);
   const [isQuickImageTransitioning, setQuickImageTransitioning] = useState(false);
-  const [floatingPhrases, setFloatingPhrases] = useState<FloatingPhrase[]>([]);
   const CLOSE_ANIMATION_MS = 180;
   const SLIDE_MS = 3000;
   const TRANSITION_MS = 320;
-  const phraseIdRef = useRef(0);
-  const phraseCursorRef = useRef(0);
-  const phraseTimersRef = useRef<number[]>([]);
-  const lastToneRef = useRef<FloatingPhrase["tone"]>("deep");
 
   useEffect(() => {
     setSubmitted(false);
@@ -182,10 +274,7 @@ export function QuickOrderModal({ product, initialQuantity = 1, onClosed, onOpen
     setConsentChecked(false);
     setQuickImageIndex(0);
     setQuickImageTransitioning(false);
-    setFloatingPhrases([]);
     setQuickOrderClosing(false);
-    phraseCursorRef.current = 0;
-    lastToneRef.current = "deep";
   }, [initialQuantity, product.sku]);
 
   const closeQuickOrder = () => {
@@ -200,10 +289,22 @@ export function QuickOrderModal({ product, initialQuantity = 1, onClosed, onOpen
     setSubmitted(true);
   };
 
-  const quickOrderPhrases = useMemo<PhraseOption[]>(
-    () => QUICK_ORDER_PHRASES.map((text) => ({ text, kind: "regular" as const })),
-    [],
-  );
+  const typographicPhraseCycle = useMemo(() => {
+    const productPhrases = buildProductPhrases(product);
+    const merged = [...generalPhrases, ...productPhrases];
+    const seen = new Set<string>();
+    const unique: string[] = [];
+    for (const p of merged) {
+      const t = p.trim();
+      if (!t) continue;
+      const k = t.toLowerCase();
+      if (seen.has(k)) continue;
+      seen.add(k);
+      unique.push(t);
+    }
+    const base = unique.length ? unique : [...generalPhrases];
+    return shuffleStrings(base, hashString(product.sku));
+  }, [product]);
 
   const quickOrderMediaImages = useMemo(() => {
     const drawingUrls = new Set(product.drawings.flatMap((drawing) => drawing.urls));
@@ -275,101 +376,6 @@ export function QuickOrderModal({ product, initialQuantity = 1, onClosed, onOpen
     }, SLIDE_MS);
     return () => window.clearInterval(timer);
   }, [TRANSITION_MS, SLIDE_MS, isSubmitted, quickOrderMediaImages]);
-
-  useEffect(() => {
-    const pickTone = (): FloatingPhrase["tone"] => {
-      const tones: FloatingPhrase["tone"][] = ["deep", "blue", "sky", "amber"];
-      const candidates = tones.filter((tone) => tone !== lastToneRef.current);
-      const next = candidates[Math.floor(Math.random() * candidates.length)] ?? tones[0];
-      lastToneRef.current = next;
-      return next;
-    };
-
-    const clearPhraseTimers = () => {
-      phraseTimersRef.current.forEach((id) => window.clearTimeout(id));
-      phraseTimersRef.current = [];
-    };
-    const pickPhrase = (existing: FloatingPhrase[]) => {
-      const hasCountry = existing.some((phrase) => phrase.kind === "country" && !phrase.exiting);
-      const pool = hasCountry ? quickOrderPhrases.filter((p) => p.kind !== "country") : quickOrderPhrases;
-      if (!pool.length) return null;
-      const phrase = pool[phraseCursorRef.current % pool.length];
-      phraseCursorRef.current += 1;
-      return phrase;
-    };
-    const addPhraseToSlot = (slot: number) => {
-      setFloatingPhrases((prev) => {
-        if (prev.some((p) => p.slot === slot)) return prev;
-        const selected = pickPhrase(prev);
-        if (!selected) return prev;
-        const id = ++phraseIdRef.current;
-        const drift = CLOUD_SLOT_DRIFT[slot] ?? CLOUD_SLOT_DRIFT[0];
-        const pos = CLOUD_SLOTS[slot] ?? CLOUD_SLOTS[0];
-        return [
-          ...prev,
-          {
-            id,
-            slot,
-            text: selected.text,
-            kind: selected.kind,
-            tone: pickTone(),
-            fontSizeRem: resolvePhraseFontSize(selected.text),
-            entering: true,
-            softFading: false,
-            x: pos.x,
-            y: pos.y,
-            vx: drift.x,
-            vy: drift.y,
-            lifeMs: 0,
-            enterMs: 1800,
-            exitMs: 1800,
-            exiting: false,
-          },
-        ];
-      });
-      phraseTimersRef.current.push(
-        window.setTimeout(() => {
-          setFloatingPhrases((prev) => prev.map((p) => (p.slot === slot ? { ...p, entering: false } : p)));
-        }, 1800),
-      );
-    };
-    const replaceSlot = (slot: number) => {
-      setFloatingPhrases((prev) => {
-        if (prev.length < 5) return prev;
-        return prev.map((p) => (p.slot === slot ? { ...p, exiting: true } : p));
-      });
-      phraseTimersRef.current.push(
-        window.setTimeout(() => {
-          setFloatingPhrases((prev) => prev.filter((p) => p.slot !== slot));
-          addPhraseToSlot(slot);
-        }, 1800),
-      );
-    };
-    const scheduleSlotReplacement = (slot: number) => {
-      // Интервал смены фразы для каждого слота (сейчас 30-60 сек).
-      const delay = 30000 + Math.floor(Math.random() * 30000);
-      phraseTimersRef.current.push(
-        window.setTimeout(() => {
-          replaceSlot(slot);
-          scheduleSlotReplacement(slot);
-        }, delay),
-      );
-    };
-
-    clearPhraseTimers();
-    setFloatingPhrases([]);
-    if (isSubmitted || !quickOrderPhrases.length) return;
-
-    CLOUD_SLOTS.forEach((_, idx) => {
-      phraseTimersRef.current.push(window.setTimeout(() => addPhraseToSlot(idx), idx * 320));
-    });
-
-    CLOUD_SLOTS.forEach((_, slotIdx) => {
-      scheduleSlotReplacement(slotIdx);
-    });
-
-    return () => clearPhraseTimers();
-  }, [quickOrderPhrases, isSubmitted]);
 
   return (
     <div
@@ -542,26 +548,11 @@ export function QuickOrderModal({ product, initialQuantity = 1, onClosed, onOpen
                     />
                   </div>
                   <aside className="quick-order-insights">
-                    <div className="quick-order-phrase-cloud">
-                      {floatingPhrases.map((phrase) => (
-                        <p
-                          key={phrase.id}
-                          className={`quick-order-phrase slot-${phrase.slot} tone-${phrase.tone} ${phrase.entering ? "is-entering" : ""} ${phrase.softFading ? "is-soft-fading" : ""} ${phrase.exiting ? "is-transitioning" : ""}`}
-                          style={{
-                            left: `${phrase.x}%`,
-                            top: `${phrase.y}%`,
-                            fontSize: `${phrase.fontSizeRem}rem`,
-                            animationDuration: `${phrase.enterMs}ms`,
-                            "--drift-x": `${phrase.vx}px`,
-                            "--drift-y": `${phrase.vy}px`,
-                            // Скорость плавного дрейфа текста (чем больше, тем медленнее).
-                            "--drift-duration": `${28250000 + (phrase.id % 4) * 150000}ms`,
-                          } as CSSProperties}
-                        >
-                          {phrase.text}
-                        </p>
-                      ))}
-                    </div>
+                    <QuickOrderTypographicDrift
+                      phrases={typographicPhraseCycle}
+                      seed={hashString(product.sku)}
+                      isPaused={isQuickOrderClosing}
+                    />
                   </aside>
                 </div>
                 <section className="quick-order-meta">
